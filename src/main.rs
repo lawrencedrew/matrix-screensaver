@@ -1,3 +1,5 @@
+mod config;
+
 fn main() {
-    println!("Hello, world!");
+    let _cfg = config::Config::load();
 }
