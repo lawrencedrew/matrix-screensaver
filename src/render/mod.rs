@@ -130,10 +130,16 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
             canvas.set_draw_color(Color::RGB(0, 0, 0));
             canvas.clear();
 
+            let fade = (startup_time.elapsed().as_secs_f32() / 2.0).min(1.0);
+            let head_color = Color::RGB(
+                (200.0 * fade) as u8,
+                (255.0 * fade) as u8,
+                (200.0 * fade) as u8,
+            );
             for col in cols.iter_mut() {
                 col.update(delta);
                 let head_cell = col.head_y as i32;
-                for dist in 0..=(col.trail_len + 1) {
+                for dist in 0..=col.trail_len {
                     let cell_y = head_cell - dist as i32;
                     if cell_y < 0 || cell_y >= rows {
                         continue;
@@ -142,18 +148,13 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
                     if raw_brightness == 0 {
                         continue;
                     }
-                    let fade = (startup_time.elapsed().as_secs_f32() / 2.0).min(1.0);
                     let brightness = (raw_brightness as f32 * fade) as u8;
                     if brightness == 0 {
                         continue;
                     }
                     let ch = chars[rng.gen_range(0..chars.len())];
                     let color = if dist == 0 {
-                        Color::RGB(
-                            (200.0 * fade) as u8,
-                            (255.0 * fade) as u8,
-                            (200.0 * fade) as u8,
-                        )
+                        head_color
                     } else {
                         Color::RGB(
                             (base_color.r as f32 * brightness as f32 / 255.0) as u8,
