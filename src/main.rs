@@ -26,8 +26,10 @@ async fn main() -> anyhow::Result<()> {
                 let handle = tokio::task::spawn_blocking(move || {
                     render::run_screensaver(&cfg)
                 });
-                if let Err(e) = handle.await? {
-                    eprintln!("matrix-screensaver: screensaver error: {e}");
+                match handle.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => eprintln!("matrix-screensaver: screensaver error: {e}"),
+                    Err(e) => eprintln!("matrix-screensaver: screensaver panicked: {e}"),
                 }
             }
             IdleEvent::Wake => {
