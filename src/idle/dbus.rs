@@ -8,7 +8,9 @@ pub struct DbusIdleDetector;
 #[async_trait]
 impl IdleDetector for DbusIdleDetector {
     async fn is_available(&self) -> bool {
-        zbus::Connection::session().await.is_ok()
+        let Ok(conn) = zbus::Connection::session().await else { return false; };
+        // Check if either KDE or GNOME idle provider is available
+        kde_idle_ms(&conn).await.is_ok() || gnome_idle_ms(&conn).await.is_ok()
     }
 
     async fn run(&self, timeout_secs: u64, tx: mpsc::Sender<IdleEvent>) -> Result<()> {

@@ -19,12 +19,13 @@ impl IdleDetector for WaylandIdleDetector {
         if std::env::var("WAYLAND_DISPLAY").is_err() {
             return false;
         }
-        // Try to connect and verify ext_idle_notifier_v1 is available
         tokio::task::spawn_blocking(|| {
             let Ok(conn) = Connection::connect_to_env() else { return false; };
-            let Ok((globals, mut queue)) = registry_queue_init::<DummyState>(&conn) else { return false; };
-            let qh = queue.handle();
-            globals.bind::<ExtIdleNotifierV1, _, _>(&qh, 1..=1, ()).is_ok()
+            let Ok((globals, _queue)) = registry_queue_init::<DummyState>(&conn) else { return false; };
+            // Check if the global is advertised without binding it (avoids zombie objects)
+            globals.contents().with_list(|list| {
+                list.iter().any(|g| g.interface == "ext_idle_notifier_v1")
+            })
         })
         .await
         .unwrap_or(false)

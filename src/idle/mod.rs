@@ -29,5 +29,8 @@ pub async fn detect_backend() -> Box<dyn IdleDetector> {
             return backend;
         }
     }
-    panic!("No idle detection backend available. Ensure you are running X11 or a supported Wayland compositor.");
+    // Return a no-op backend that logs an error and idles forever
+    // (avoids unwind panic in the tokio runtime)
+    eprintln!("matrix-screensaver: no idle detection backend available. Ensure you are running X11 or a supported Wayland compositor.");
+    std::process::exit(1);
 }

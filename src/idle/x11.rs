@@ -24,8 +24,14 @@ impl IdleDetector for X11IdleDetector {
 
         loop {
             tokio::time::sleep(poll).await;
-            let info = screensaver::query_info(&conn, root)?.reply()?;
-            let idle_ms = info.ms_since_user_input as u64;
+            let cookie = match screensaver::query_info(&conn, root) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let idle_ms = match cookie.reply() {
+                Ok(info) => info.ms_since_user_input as u64,
+                Err(_) => continue,
+            };
 
             if !was_idle && idle_ms >= timeout_ms {
                 was_idle = true;

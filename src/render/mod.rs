@@ -112,8 +112,10 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
         if elapsed < frame_duration {
             std::thread::sleep(frame_duration - elapsed);
         }
-        let delta = now.duration_since(last_frame).as_secs_f32().max(0.001);
-        last_frame = Instant::now();
+        // Capture time AFTER sleep to get accurate delta
+        let after_sleep = Instant::now();
+        let delta = after_sleep.duration_since(last_frame).as_secs_f32().max(0.001);
+        last_frame = after_sleep;
 
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.clear();
