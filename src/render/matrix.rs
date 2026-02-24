@@ -21,6 +21,7 @@ pub struct Column {
     pub trail_len: usize,
     height_cells: i32,
     speed: f32,
+    base_speed: f32,
     delay: f32,
 }
 
@@ -33,6 +34,7 @@ impl Column {
             trail_len: rng.gen_range(8..20),
             height_cells,
             speed: speed * rng.gen_range(0.5f32..1.5),
+            base_speed: speed,
             delay: 0.0,
         }
     }
@@ -47,7 +49,7 @@ impl Column {
             let mut rng = rand::thread_rng();
             self.head_y = -(rng.gen_range(1..5) as f32);
             self.trail_len = rng.gen_range(8..20);
-            self.speed = rng.gen_range(0.5f32..1.5);
+            self.speed = self.base_speed * rng.gen_range(0.5f32..1.5);
             self.delay = rng.gen_range(0.0f32..2.0);
         }
     }
@@ -71,10 +73,14 @@ mod tests {
 
     #[test]
     fn test_column_advances() {
-        let mut col = Column::new(0, 24, 1.0);
+        // Create column starting above screen (delay=0, so update must advance it)
+        // Use a tall screen so the column won't reset in 1 second
+        let mut col = Column::new(0, 1000, 1.0);
+        // Force head_y to a known position near top to avoid reset
+        col.head_y = 0.0;
         let initial_head = col.head_y;
         col.update(1.0);
-        assert!(col.head_y != initial_head || col.head_y < 0.0);
+        assert!(col.head_y > initial_head, "column should advance downward each update");
     }
 
     #[test]
