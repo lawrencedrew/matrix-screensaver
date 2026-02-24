@@ -50,10 +50,19 @@ impl Default for Config {
 
 impl Config {
     pub fn load() -> Self {
-        config_path()
-            .and_then(|p| fs::read_to_string(p).ok())
-            .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default()
+        let Some(path) = config_path() else {
+            return Self::default();
+        };
+        let Ok(contents) = fs::read_to_string(&path) else {
+            return Self::default(); // file doesn't exist yet
+        };
+        match toml::from_str(&contents) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                eprintln!("matrix-screensaver: failed to parse config at {}: {e}", path.display());
+                Self::default()
+            }
+        }
     }
 }
 
