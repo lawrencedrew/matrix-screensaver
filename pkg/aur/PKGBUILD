@@ -1,0 +1,24 @@
+# Maintainer: Lawrence Drew
+pkgname=matrix-screensaver
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Matrix-style falling character rain screensaver for Linux"
+arch=('x86_64')
+url="https://github.com/lawrencedrew/matrix-screensaver"
+license=('MIT')
+depends=('sdl2' 'sdl2_ttf' 'noto-fonts-cjk')
+makedepends=('rust' 'cargo')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$pkgname-$pkgver"
+    cargo build --release --locked
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+    install -Dm644 "$pkgname.service" "$pkgdir/usr/lib/systemd/user/$pkgname.service"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
