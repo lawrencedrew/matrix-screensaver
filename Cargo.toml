@@ -19,3 +19,4 @@ x11rb = { version = "0.13", features = ["screensaver"] }
 rand = "0.8"
 anyhow = "1"
 async-trait = "0.1"
+futures-util = "0.3"

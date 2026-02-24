@@ -13,11 +13,21 @@ async fn main() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::channel::<IdleEvent>(8);
 
     let timeout = config.idle_timeout_secs;
+    let tx_idle = tx.clone();
     tokio::spawn(async move {
-        if let Err(e) = backend.run(timeout, tx).await {
+        if let Err(e) = backend.run(timeout, tx_idle).await {
             eprintln!("matrix-screensaver: idle backend error: {e}");
         }
     });
+
+    let tx_lock = tx.clone();
+    tokio::spawn(async move {
+        if let Err(e) = idle::lock::run_lock_listener(tx_lock).await {
+            eprintln!("matrix-screensaver: lock listener error: {e}");
+        }
+    });
+
+    drop(tx); // channel closes when both tasks end
 
     while let Some(event) = rx.recv().await {
         match event {

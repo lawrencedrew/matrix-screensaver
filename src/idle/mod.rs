@@ -5,6 +5,7 @@ use anyhow::Result;
 pub mod wayland;
 pub mod dbus;
 pub mod x11;
+pub mod lock;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IdleEvent {
