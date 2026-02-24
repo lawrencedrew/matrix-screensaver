@@ -17,6 +17,19 @@ impl Default for Charset {
     }
 }
 
+impl std::str::FromStr for Charset {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "katakana" => Ok(Charset::Katakana),
+            "latin"    => Ok(Charset::Latin),
+            "digits"   => Ok(Charset::Digits),
+            "mixed"    => Ok(Charset::Mixed),
+            _          => Err(()),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     #[serde(default = "default_timeout")]

@@ -22,12 +22,41 @@ cp matrix-screensaver.service ~/.config/systemd/user/
 systemctl --user enable --now matrix-screensaver
 ```
 
-## Config
+## Changing the timeout
 
-`~/.config/matrix-screensaver/config.toml`:
+The quickest way is the `--timeout` flag. Edit the `ExecStart` line in the service file:
+
+```
+~/.config/systemd/user/matrix-screensaver.service
+```
+
+```ini
+ExecStart=%h/.local/bin/matrix-screensaver --timeout 300
+```
+
+Then reload:
+```bash
+systemctl --user daemon-reload && systemctl --user restart matrix-screensaver
+```
+
+## CLI flags
+
+All flags override the config file.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--timeout <seconds>` | `600` | Idle seconds before activating |
+| `--color <hex>` | `#00ff00` | Rain colour |
+| `--fps <n>` | `30` | Target frame rate |
+| `--speed <n>` | `1.0` | Rain speed multiplier |
+| `--charset <name>` | `katakana` | Character set: `katakana`, `latin`, `digits`, `mixed` |
+
+## Config file
+
+`~/.config/matrix-screensaver/config.toml` (CLI flags override these values):
 
 ```toml
-idle_timeout_secs = 300
+idle_timeout_secs = 600
 color = "#00ff00"
 fps = 30
 speed = 1.0

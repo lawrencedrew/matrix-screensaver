@@ -7,7 +7,8 @@ use idle::IdleEvent;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config = config::Config::load();
+    let mut config = config::Config::load();
+    apply_cli_args(&mut config);
     let backend = idle::detect_backend().await;
 
     let (tx, mut rx) = mpsc::channel::<IdleEvent>(8);
@@ -49,4 +50,53 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn apply_cli_args(config: &mut config::Config) {
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--timeout" => {
+                if let Some(val) = args.get(i + 1) {
+                    if let Ok(secs) = val.parse::<u64>() {
+                        config.idle_timeout_secs = secs;
+                    }
+                    i += 1;
+                }
+            }
+            "--color" => {
+                if let Some(val) = args.get(i + 1) {
+                    config.color = val.clone();
+                    i += 1;
+                }
+            }
+            "--fps" => {
+                if let Some(val) = args.get(i + 1) {
+                    if let Ok(fps) = val.parse::<u32>() {
+                        config.fps = fps;
+                    }
+                    i += 1;
+                }
+            }
+            "--speed" => {
+                if let Some(val) = args.get(i + 1) {
+                    if let Ok(speed) = val.parse::<f32>() {
+                        config.speed = speed;
+                    }
+                    i += 1;
+                }
+            }
+            "--charset" => {
+                if let Some(val) = args.get(i + 1) {
+                    if let Ok(cs) = val.parse::<config::Charset>() {
+                        config.charset = cs;
+                    }
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
 }
