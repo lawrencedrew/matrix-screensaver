@@ -13,7 +13,7 @@ sdl2 = { version = "0.37", features = ["ttf"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["staging"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 zbus = { version = "4", default-features = false, features = ["tokio"] }
 x11rb = { version = "0.13", features = ["screensaver"] }
 rand = "0.8"
