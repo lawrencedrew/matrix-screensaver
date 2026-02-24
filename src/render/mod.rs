@@ -50,8 +50,8 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
     let video = sdl.video().map_err(|e| anyhow::anyhow!(e))?;
     let ttf_ctx = sdl2::ttf::init().map_err(|e| anyhow::anyhow!(e))?;
 
-    let font_path = find_monospace_font()?;
-    let font = ttf_ctx.load_font(font_path, 16).map_err(|e| anyhow::anyhow!(e))?;
+    let (font_path, font_index) = find_monospace_font()?;
+    let font = ttf_ctx.load_font_at_index(font_path, font_index, 16).map_err(|e| anyhow::anyhow!(e))?;
 
     let chars = charset_chars(&config.charset);
     let base_color = parse_color(&config.color);
@@ -64,11 +64,13 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
 
     for i in 0..num_displays {
         let bounds = video.display_bounds(i as i32).map_err(|e| anyhow::anyhow!(e))?;
-        let window = video
+        let mut window = video
             .window("matrix-screensaver", bounds.width(), bounds.height())
             .position(bounds.x(), bounds.y())
             .borderless()
             .build()?;
+        window.set_fullscreen(sdl2::video::FullscreenType::Desktop)
+            .map_err(|e| anyhow::anyhow!(e))?;
         let canvas = window.into_canvas().accelerated().build()?;
         let cols = bounds.width() as i32 / CELL_W;
         let rows = bounds.height() as i32 / CELL_H;
@@ -136,13 +138,22 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
                     if cell_y < 0 || cell_y >= rows {
                         continue;
                     }
-                    let brightness = col.brightness_at(dist);
+                    let raw_brightness = col.brightness_at(dist);
+                    if raw_brightness == 0 {
+                        continue;
+                    }
+                    let fade = (startup_time.elapsed().as_secs_f32() / 2.0).min(1.0);
+                    let brightness = (raw_brightness as f32 * fade) as u8;
                     if brightness == 0 {
                         continue;
                     }
                     let ch = chars[rng.gen_range(0..chars.len())];
                     let color = if dist == 0 {
-                        Color::RGB(200, 255, 200)
+                        Color::RGB(
+                            (200.0 * fade) as u8,
+                            (255.0 * fade) as u8,
+                            (200.0 * fade) as u8,
+                        )
                     } else {
                         Color::RGB(
                             (base_color.r as f32 * brightness as f32 / 255.0) as u8,
@@ -171,21 +182,26 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn find_monospace_font() -> anyhow::Result<std::path::PathBuf> {
-    let candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-        "/usr/share/fonts/liberation-mono/LiberationMono-Regular.ttf",
-        "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf",
+fn find_monospace_font() -> anyhow::Result<(std::path::PathBuf, u32)> {
+    let candidates: &[(&str, u32)] = &[
+        // Noto Sans Mono CJK JP — covers Katakana, prefer it
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 5),
+        ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 5),
+        ("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", 5),
+        // Latin fallbacks (index 0 for single-face TTF)
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 0),
+        ("/usr/share/fonts/TTF/DejaVuSansMono.ttf", 0),
+        ("/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf", 0),
+        ("/usr/share/fonts/liberation-mono/LiberationMono-Regular.ttf", 0),
+        ("/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf", 0),
     ];
-    for path in &candidates {
+    for &(path, index) in candidates {
         let p = std::path::PathBuf::from(path);
         if p.exists() {
-            return Ok(p);
+            return Ok((p, index));
         }
     }
     anyhow::bail!(
-        "No monospace font found. Install fonts-dejavu-core or fonts-liberation."
+        "No monospace font found. Install fonts-noto-cjk, fonts-dejavu-core, or fonts-liberation."
     )
 }
