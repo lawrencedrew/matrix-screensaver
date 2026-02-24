@@ -31,7 +31,7 @@ pub struct Config {
     pub charset: Charset,
 }
 
-fn default_timeout() -> u64 { 300 }
+fn default_timeout() -> u64 { 600 }
 fn default_color() -> String { "#00ff00".to_string() }
 fn default_fps() -> u32 { 30 }
 fn default_speed() -> f32 { 1.0 }
@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn test_defaults() {
         let cfg = Config::default();
-        assert_eq!(cfg.idle_timeout_secs, 300);
+        assert_eq!(cfg.idle_timeout_secs, 600);
         assert_eq!(cfg.fps, 30);
         assert!((cfg.speed - 1.0).abs() < f32::EPSILON);
         assert_eq!(cfg.charset, Charset::Katakana);
