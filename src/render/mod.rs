@@ -95,8 +95,9 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
-                | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => break 'running,
-                // Fix 4: Only exit on MouseMotion after 500 ms grace period
+                | Event::KeyDown { .. }
+                | Event::MouseButtonDown { .. } => break 'running,
+                // Only exit on MouseMotion after 500ms grace period (avoids synthetic events on startup)
                 Event::MouseMotion { .. }
                     if startup_time.elapsed() > Duration::from_millis(500) =>
                 {
