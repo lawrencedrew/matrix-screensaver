@@ -2,11 +2,10 @@ pub mod matrix;
 
 use std::collections::HashMap;
 use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
-use sdl2::render::{Texture, TextureCreator};
-use sdl2::video::WindowContext;
+use sdl2::render::{Canvas, Texture, TextureCreator};
+use sdl2::video::{Window, WindowContext};
 use std::time::{Duration, Instant};
 use crate::config::Config;
 use matrix::{Column, charset_chars};
@@ -51,53 +50,58 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
     let video = sdl.video().map_err(|e| anyhow::anyhow!(e))?;
     let ttf_ctx = sdl2::ttf::init().map_err(|e| anyhow::anyhow!(e))?;
 
-    let display_mode = video.desktop_display_mode(0).map_err(|e| anyhow::anyhow!(e))?;
-    let width = display_mode.w as u32;
-    let height = display_mode.h as u32;
-
-    let window = video
-        .window("matrix-screensaver", width, height)
-        .fullscreen_desktop()
-        .build()?;
-
-    let mut canvas = window.into_canvas().accelerated().build()?;
-    let texture_creator = canvas.texture_creator();
-
     let font_path = find_monospace_font()?;
     let font = ttf_ctx.load_font(font_path, 16).map_err(|e| anyhow::anyhow!(e))?;
 
-    let cols = width as i32 / CELL_W;
-    let rows = height as i32 / CELL_H;
     let chars = charset_chars(&config.charset);
     let base_color = parse_color(&config.color);
     let frame_duration = Duration::from_secs_f32(1.0 / config.fps as f32);
 
-    let mut columns: Vec<Column> = (0..cols)
-        .map(|x| Column::new(x, rows, config.speed))
-        .collect();
+    // One borderless window per display, positioned at each display's bounds
+    let num_displays = video.num_video_displays().unwrap_or(1) as usize;
+    let mut canvases: Vec<Canvas<Window>> = Vec::new();
+    let mut columns_per_display: Vec<Vec<Column>> = Vec::new();
+
+    for i in 0..num_displays {
+        let bounds = video.display_bounds(i as i32).map_err(|e| anyhow::anyhow!(e))?;
+        let window = video
+            .window("matrix-screensaver", bounds.width(), bounds.height())
+            .position(bounds.x(), bounds.y())
+            .borderless()
+            .build()?;
+        let canvas = window.into_canvas().accelerated().build()?;
+        let cols = bounds.width() as i32 / CELL_W;
+        let rows = bounds.height() as i32 / CELL_H;
+        columns_per_display.push((0..cols).map(|x| Column::new(x, rows, config.speed)).collect());
+        canvases.push(canvas);
+    }
+
+    // TextureCreator<WindowContext> is owned (Rc internally) — not a borrow from Canvas
+    let texture_creators: Vec<TextureCreator<WindowContext>> =
+        canvases.iter().map(|c| c.texture_creator()).collect();
+
+    // Glyph cache per display — each display's renderer requires its own textures
+    // texture_creators must outlive glyph_caches
+    let mut glyph_caches: Vec<HashMap<char, Texture>> = texture_creators
+        .iter()
+        .map(|tc| build_glyph_cache(&font, &chars, tc))
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     let mut event_pump = sdl.event_pump().map_err(|e| anyhow::anyhow!(e))?;
     let mut last_frame = Instant::now();
+    let startup_time = Instant::now();
 
     use rand::Rng;
     let mut rng = rand::thread_rng();
 
     sdl.mouse().show_cursor(false);
 
-    // Fix 1: Build glyph cache once before the main loop
-    let mut glyph_cache = build_glyph_cache(&font, &chars, &texture_creator)?;
-
-    // Fix 4: Record startup time so we can ignore early MouseMotion events
-    let startup_time = Instant::now();
-
     'running: loop {
-        // Fix 2: Process events at the TOP of every loop iteration
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
                 | Event::KeyDown { .. }
                 | Event::MouseButtonDown { .. } => break 'running,
-                // Only exit on MouseMotion after 500ms grace period (avoids synthetic events on startup)
                 Event::MouseMotion { .. }
                     if startup_time.elapsed() > Duration::from_millis(500) =>
                 {
@@ -107,60 +111,60 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
             }
         }
 
-        // Fix 2: Frame-rate throttle without skipping event processing
         let now = Instant::now();
         let elapsed = now.duration_since(last_frame);
         if elapsed < frame_duration {
             std::thread::sleep(frame_duration - elapsed);
         }
-        // Capture time AFTER sleep to get accurate delta
         let after_sleep = Instant::now();
         let delta = after_sleep.duration_since(last_frame).as_secs_f32().max(0.001);
         last_frame = after_sleep;
 
-        canvas.set_draw_color(Color::RGB(0, 0, 0));
-        canvas.clear();
+        for (idx, canvas) in canvases.iter_mut().enumerate() {
+            let cols = &mut columns_per_display[idx];
+            let glyph_cache = &mut glyph_caches[idx];
+            let rows = canvas.output_size().map(|(_, h)| h as i32).unwrap_or(1080) / CELL_H;
 
-        for col in &mut columns {
-            col.update(delta);
-            let head_cell = col.head_y as i32;
-            for dist in 0..=(col.trail_len + 1) {
-                let cell_y = head_cell - dist as i32;
-                if cell_y < 0 || cell_y >= rows {
-                    continue;
-                }
-                let brightness = col.brightness_at(dist);
-                if brightness == 0 {
-                    continue;
-                }
+            canvas.set_draw_color(Color::RGB(0, 0, 0));
+            canvas.clear();
 
-                let ch = chars[rng.gen_range(0..chars.len())];
-                let color = if dist == 0 {
-                    Color::RGB(200, 255, 200)
-                } else {
-                    Color::RGB(
-                        (base_color.r as f32 * brightness as f32 / 255.0) as u8,
-                        (base_color.g as f32 * brightness as f32 / 255.0) as u8,
-                        (base_color.b as f32 * brightness as f32 / 255.0) as u8,
-                    )
-                };
-
-                // Fix 1: Use cached texture with color modulation instead of
-                // allocating a new texture per cell per frame
-                if let Some(texture) = glyph_cache.get_mut(&ch) {
-                    texture.set_color_mod(color.r, color.g, color.b);
-                    let dst = Rect::new(
-                        col.col_x * CELL_W,
-                        cell_y * CELL_H,
-                        CELL_W as u32,
-                        CELL_H as u32,
-                    );
-                    canvas.copy(texture, None, Some(dst)).map_err(|e| anyhow::anyhow!(e))?;
+            for col in cols.iter_mut() {
+                col.update(delta);
+                let head_cell = col.head_y as i32;
+                for dist in 0..=(col.trail_len + 1) {
+                    let cell_y = head_cell - dist as i32;
+                    if cell_y < 0 || cell_y >= rows {
+                        continue;
+                    }
+                    let brightness = col.brightness_at(dist);
+                    if brightness == 0 {
+                        continue;
+                    }
+                    let ch = chars[rng.gen_range(0..chars.len())];
+                    let color = if dist == 0 {
+                        Color::RGB(200, 255, 200)
+                    } else {
+                        Color::RGB(
+                            (base_color.r as f32 * brightness as f32 / 255.0) as u8,
+                            (base_color.g as f32 * brightness as f32 / 255.0) as u8,
+                            (base_color.b as f32 * brightness as f32 / 255.0) as u8,
+                        )
+                    };
+                    if let Some(texture) = glyph_cache.get_mut(&ch) {
+                        texture.set_color_mod(color.r, color.g, color.b);
+                        let dst = Rect::new(
+                            col.col_x * CELL_W,
+                            cell_y * CELL_H,
+                            CELL_W as u32,
+                            CELL_H as u32,
+                        );
+                        canvas.copy(texture, None, Some(dst)).map_err(|e| anyhow::anyhow!(e))?;
+                    }
                 }
             }
-        }
 
-        canvas.present();
+            canvas.present();
+        }
     }
 
     sdl.mouse().show_cursor(true);
