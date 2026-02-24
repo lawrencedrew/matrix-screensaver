@@ -2,6 +2,8 @@
 name = "matrix-screensaver"
 version = "0.1.0"
 edition = "2021"
+description = "Matrix-style falling character rain screensaver for Linux"
+license = "MIT"
 
 [[bin]]
 name = "matrix-screensaver"
