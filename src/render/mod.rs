@@ -178,6 +178,21 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
                         canvas.copy(texture, None, Some(dst)).map_err(|e| anyhow::anyhow!(e))?;
                     }
                 }
+                // Glitch: 0.5% chance per frame to flash a random cell white
+                if rng.gen::<f32>() < 0.005 {
+                    let glitch_y = rng.gen_range(0..rows);
+                    let ch = chars[rng.gen_range(0..chars.len())];
+                    if let Some(texture) = glyph_cache.get_mut(&ch) {
+                        texture.set_color_mod(255, 255, 255);
+                        let dst = Rect::new(
+                            col.col_x * CELL_W,
+                            glitch_y * CELL_H,
+                            CELL_W as u32,
+                            CELL_H as u32,
+                        );
+                        let _ = canvas.copy(texture, None, Some(dst));
+                    }
+                }
             }
 
             canvas.present();
