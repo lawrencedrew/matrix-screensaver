@@ -62,6 +62,9 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
     let mut canvases: Vec<Canvas<Window>> = Vec::new();
     let mut columns_per_display: Vec<Vec<Column>> = Vec::new();
 
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+
     for i in 0..num_displays {
         let bounds = video.display_bounds(i as i32).map_err(|e| anyhow::anyhow!(e))?;
         let mut window = video
@@ -74,7 +77,12 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
         let canvas = window.into_canvas().accelerated().build()?;
         let cols = bounds.width() as i32 / CELL_W;
         let rows = bounds.height() as i32 / CELL_H;
-        columns_per_display.push((0..cols).map(|x| Column::new(x, rows, config.speed)).collect());
+        columns_per_display.push(
+            (0..cols)
+                .filter(|_| rng.gen::<f32>() > 0.3)
+                .map(|x| Column::new(x, rows, config.speed))
+                .collect(),
+        );
         canvases.push(canvas);
     }
 
@@ -92,9 +100,6 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
     let mut event_pump = sdl.event_pump().map_err(|e| anyhow::anyhow!(e))?;
     let mut last_frame = Instant::now();
     let startup_time = Instant::now();
-
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
 
     sdl.mouse().show_cursor(false);
 

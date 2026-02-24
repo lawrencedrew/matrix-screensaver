@@ -31,7 +31,7 @@ impl Column {
         Column {
             col_x,
             head_y: -(rng.gen_range(1..height_cells) as f32),
-            trail_len: rng.gen_range(8..20),
+            trail_len: rng.gen_range(4..24),
             height_cells,
             speed: speed * rng.gen_range(0.5f32..1.5),
             base_speed: speed,
@@ -48,7 +48,7 @@ impl Column {
         if self.head_y - self.trail_len as f32 > self.height_cells as f32 {
             let mut rng = rand::thread_rng();
             self.head_y = -(rng.gen_range(1..5) as f32);
-            self.trail_len = rng.gen_range(8..20);
+            self.trail_len = rng.gen_range(4..24);
             self.speed = self.base_speed * rng.gen_range(0.5f32..1.5);
             self.delay = rng.gen_range(0.0f32..2.0);
         }
