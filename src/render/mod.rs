@@ -1,9 +1,12 @@
 pub mod matrix;
 
+use std::collections::HashMap;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
+use sdl2::render::{Texture, TextureCreator};
+use sdl2::video::WindowContext;
 use std::time::{Duration, Instant};
 use crate::config::Config;
 use matrix::{Column, charset_chars};
@@ -11,12 +14,36 @@ use matrix::{Column, charset_chars};
 const CELL_W: i32 = 14;
 const CELL_H: i32 = 18;
 
+// Fix 3: Safe parse_color that validates hex string length
 pub fn parse_color(hex: &str) -> Color {
     let hex = hex.trim_start_matches('#');
+    if hex.len() < 6 {
+        return Color::RGB(0, 255, 0); // default green
+    }
     let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
     let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255);
     let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
     Color::RGB(r, g, b)
+}
+
+// Fix 1: Pre-render all glyphs once into a cache keyed by char
+fn build_glyph_cache<'a>(
+    font: &sdl2::ttf::Font,
+    chars: &[char],
+    texture_creator: &'a TextureCreator<WindowContext>,
+) -> anyhow::Result<HashMap<char, Texture<'a>>> {
+    let mut cache = HashMap::new();
+    for &ch in chars {
+        let surface = font
+            .render_char(ch)
+            .blended(Color::RGB(255, 255, 255))
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let texture = texture_creator
+            .create_texture_from_surface(&surface)
+            .map_err(|e| anyhow::anyhow!(e))?;
+        cache.insert(ch, texture);
+    }
+    Ok(cache)
 }
 
 pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
@@ -57,24 +84,36 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
 
     sdl.mouse().show_cursor(false);
 
+    // Fix 1: Build glyph cache once before the main loop
+    let mut glyph_cache = build_glyph_cache(&font, &chars, &texture_creator)?;
+
+    // Fix 4: Record startup time so we can ignore early MouseMotion events
+    let startup_time = Instant::now();
+
     'running: loop {
+        // Fix 2: Process events at the TOP of every loop iteration
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
-                | Event::KeyDown { keycode: Some(Keycode::Escape), .. }
-                | Event::MouseMotion { .. } => break 'running,
+                | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => break 'running,
+                // Fix 4: Only exit on MouseMotion after 500 ms grace period
+                Event::MouseMotion { .. }
+                    if startup_time.elapsed() > Duration::from_millis(500) =>
+                {
+                    break 'running
+                }
                 _ => {}
             }
         }
 
+        // Fix 2: Frame-rate throttle without skipping event processing
         let now = Instant::now();
         let elapsed = now.duration_since(last_frame);
         if elapsed < frame_duration {
             std::thread::sleep(frame_duration - elapsed);
-            continue;
         }
-        let delta = elapsed.as_secs_f32();
-        last_frame = now;
+        let delta = now.duration_since(last_frame).as_secs_f32().max(0.001);
+        last_frame = Instant::now();
 
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.clear();
@@ -103,21 +142,18 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
                     )
                 };
 
-                let surface = font
-                    .render_char(ch)
-                    .blended(color)
-                    .map_err(|e| anyhow::anyhow!(e))?;
-                let texture = texture_creator
-                    .create_texture_from_surface(&surface)
-                    .map_err(|e| anyhow::anyhow!(e))?;
-
-                let dst = Rect::new(
-                    col.col_x * CELL_W,
-                    cell_y * CELL_H,
-                    CELL_W as u32,
-                    CELL_H as u32,
-                );
-                canvas.copy(&texture, None, Some(dst)).map_err(|e| anyhow::anyhow!(e))?;
+                // Fix 1: Use cached texture with color modulation instead of
+                // allocating a new texture per cell per frame
+                if let Some(texture) = glyph_cache.get_mut(&ch) {
+                    texture.set_color_mod(color.r, color.g, color.b);
+                    let dst = Rect::new(
+                        col.col_x * CELL_W,
+                        cell_y * CELL_H,
+                        CELL_W as u32,
+                        CELL_H as u32,
+                    );
+                    canvas.copy(texture, None, Some(dst)).map_err(|e| anyhow::anyhow!(e))?;
+                }
             }
         }
 
