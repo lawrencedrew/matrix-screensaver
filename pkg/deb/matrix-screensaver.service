@@ -1,0 +1,12 @@
+[Unit]
+Description=Matrix Screensaver
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/matrix-screensaver
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

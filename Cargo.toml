@@ -32,6 +32,6 @@ section = "x11"
 priority = "optional"
 assets = [
     ["target/release/matrix-screensaver", "usr/bin/", "755"],
-    ["matrix-screensaver.service", "usr/lib/systemd/user/", "644"],
+    ["pkg/deb/matrix-screensaver.service", "usr/lib/systemd/user/matrix-screensaver.service", "644"],
     ["README.md", "usr/share/doc/matrix-screensaver/README.md", "644"],
 ]

@@ -206,6 +206,7 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
                             CELL_H as u32,
                         );
                         let _ = canvas.copy(texture, None, Some(dst));
+                        texture.set_color_mod(base_color.r, base_color.g, base_color.b);
                     }
                 }
             }

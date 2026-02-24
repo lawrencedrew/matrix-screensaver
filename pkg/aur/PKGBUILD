@@ -9,6 +9,7 @@ license=('MIT')
 depends=('sdl2' 'sdl2_ttf' 'noto-fonts-cjk')
 makedepends=('rust' 'cargo')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+# Update sha256sums before AUR submission: run `updpkgsums` after creating the v$pkgver tag and release
 sha256sums=('SKIP')
 
 build() {
