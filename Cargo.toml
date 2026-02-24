@@ -20,3 +20,16 @@ rand = "0.8"
 anyhow = "1"
 async-trait = "0.1"
 futures-util = "0.3"
+
+[package.metadata.deb]
+maintainer = "Lawrence Drew"
+copyright = "2026, Lawrence Drew"
+extended-description = "Matrix-style falling character rain screensaver for Linux. Supports X11 and Wayland."
+depends = "$auto, fonts-noto-cjk"
+section = "x11"
+priority = "optional"
+assets = [
+    ["target/release/matrix-screensaver", "usr/bin/", "755"],
+    ["matrix-screensaver.service", "usr/lib/systemd/user/", "644"],
+    ["README.md", "usr/share/doc/matrix-screensaver/README.md", "644"],
+]
