@@ -13,13 +13,16 @@ impl IdleDetector for DbusIdleDetector {
 
     async fn run(&self, timeout_secs: u64, tx: mpsc::Sender<IdleEvent>) -> Result<()> {
         let conn = zbus::Connection::session().await?;
-        let timeout_ms = timeout_secs * 1000;
+        let timeout_ms = timeout_secs.saturating_mul(1000);
         let poll_interval = tokio::time::Duration::from_secs(5);
         let mut was_idle = false;
 
         loop {
             tokio::time::sleep(poll_interval).await;
-            let idle_ms = get_idle_ms(&conn).await.unwrap_or(0);
+            let idle_ms = match get_idle_ms(&conn).await {
+                Ok(ms) => ms,
+                Err(_) => continue,
+            };
 
             if !was_idle && idle_ms >= timeout_ms {
                 was_idle = true;

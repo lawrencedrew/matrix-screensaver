@@ -18,7 +18,7 @@ impl IdleDetector for X11IdleDetector {
         let (conn, screen_num) = x11rb::connect(None)?;
         let screen = &conn.setup().roots[screen_num];
         let root = screen.root;
-        let timeout_ms = timeout_secs * 1000;
+        let timeout_ms = timeout_secs.saturating_mul(1000);
         let poll = tokio::time::Duration::from_secs(5);
         let mut was_idle = false;
 
