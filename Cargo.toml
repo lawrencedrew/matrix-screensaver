@@ -19,6 +19,7 @@ wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 zbus = { version = "4", default-features = false, features = ["tokio"] }
 x11rb = { version = "0.13", features = ["screensaver"] }
 rand = "0.8"
+chrono = "0.4"
 anyhow = "1"
 async-trait = "0.1"
 futures-util = "0.3"
