@@ -1,4 +1,5 @@
 pub mod matrix;
+pub mod clock;
 
 use std::collections::HashMap;
 use sdl2::event::Event;
