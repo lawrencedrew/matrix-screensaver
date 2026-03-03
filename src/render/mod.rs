@@ -225,19 +225,17 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
                 }
             }
 
-            // Clock: primary display only
-            if idx == 0 {
-                if let Some(ref cf) = clock_font {
-                    if let Err(e) = clock_renderer.render(
-                        canvas,
-                        &texture_creators[idx],
-                        cf,
-                        startup_time.elapsed().as_secs_f32(),
-                        &mut rng,
-                        &mut clock_texture_caches[idx],
-                    ) {
-                        eprintln!("matrix-screensaver: clock render error: {e}");
-                    }
+            // Clock: all displays
+            if let Some(ref cf) = clock_font {
+                if let Err(e) = clock_renderer.render(
+                    canvas,
+                    &texture_creators[idx],
+                    cf,
+                    startup_time.elapsed().as_secs_f32(),
+                    &mut rng,
+                    &mut clock_texture_caches[idx],
+                ) {
+                    eprintln!("matrix-screensaver: clock render error: {e}");
                 }
             }
 
