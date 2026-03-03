@@ -89,7 +89,7 @@ impl ClockRenderer {
                 .map_err(|e| anyhow::anyhow!(e))?;
             red_tex.set_color_mod(180, 0, 0);
             red_tex.set_alpha_mod(180);
-            let _ = canvas.copy(&red_tex, None, Some(Rect::new(cx - 3, cy, q.width, q.height)));
+            canvas.copy(&red_tex, None, Some(Rect::new(cx - 3, cy, q.width, q.height))).map_err(|e| anyhow::anyhow!(e))?;
 
             // Blue ghost
             let blue_surface = font
@@ -101,12 +101,12 @@ impl ClockRenderer {
                 .map_err(|e| anyhow::anyhow!(e))?;
             blue_tex.set_color_mod(0, 0, 180);
             blue_tex.set_alpha_mod(180);
-            let _ = canvas.copy(&blue_tex, None, Some(Rect::new(cx + 3, cy, q.width, q.height)));
+            canvas.copy(&blue_tex, None, Some(Rect::new(cx + 3, cy, q.width, q.height))).map_err(|e| anyhow::anyhow!(e))?;
 
             // Green main
             let g = ((elapsed_secs * 2.0).sin().abs() * 30.0 + 225.0) as u8;
             glitch_tex.set_color_mod(0, g, 0);
-            let _ = canvas.copy(&glitch_tex, None, Some(Rect::new(cx, cy, q.width, q.height)));
+            canvas.copy(&glitch_tex, None, Some(Rect::new(cx, cy, q.width, q.height))).map_err(|e| anyhow::anyhow!(e))?;
 
             return Ok(());
         }
@@ -116,6 +116,10 @@ impl ClockRenderer {
         let th = cached.h;
         let cx = (sw as i32 - tw as i32) / 2;
         let cy = (sh as i32 - th as i32) / 2;
+
+        // Reset modulation to neutral before applying per-pass tints
+        cached.texture.set_color_mod(255, 255, 255);
+        cached.texture.set_alpha_mod(255);
 
         // Red ghost
         cached.texture.set_color_mod(180, 0, 0);
