@@ -107,7 +107,7 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
         .map(|tc| build_glyph_cache(&font, &chars, tc))
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    let mut clock_renderer = ClockRenderer::new();
+    let mut clock_renderers: Vec<ClockRenderer> = (0..num_displays).map(|_| ClockRenderer::new()).collect();
     let mut clock_texture_caches: Vec<Option<CachedClockTexture>> =
         (0..num_displays).map(|_| None).collect();
 
@@ -230,7 +230,7 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
 
             // Clock: all displays
             if let Some(ref cf) = clock_font {
-                if let Err(e) = clock_renderer.render(
+                if let Err(e) = clock_renderers[idx].render(
                     canvas,
                     &texture_creators[idx],
                     cf,
