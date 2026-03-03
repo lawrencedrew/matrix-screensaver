@@ -10,6 +10,7 @@ use sdl2::video::{Window, WindowContext};
 use std::time::{Duration, Instant};
 use crate::config::Config;
 use matrix::{Column, charset_chars};
+use clock::{ClockRenderer, CachedClockTexture};
 
 const CELL_W: i32 = 14;
 const CELL_H: i32 = 18;
@@ -52,7 +53,15 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
     let ttf_ctx = sdl2::ttf::init().map_err(|e| anyhow::anyhow!(e))?;
 
     let (font_path, font_index) = find_monospace_font()?;
-    let font = ttf_ctx.load_font_at_index(font_path, font_index, 16).map_err(|e| anyhow::anyhow!(e))?;
+    let font = ttf_ctx.load_font_at_index(&font_path, font_index, 16).map_err(|e| anyhow::anyhow!(e))?;
+    let clock_font_result = ttf_ctx.load_font_at_index(&font_path, font_index, 72);
+    let clock_font = match clock_font_result {
+        Ok(f) => Some(f),
+        Err(e) => {
+            eprintln!("matrix-screensaver: clock font load failed, clock disabled: {e}");
+            None
+        }
+    };
 
     let chars = charset_chars(&config.charset);
     let base_color = parse_color(&config.color);
@@ -97,6 +106,10 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
         .iter()
         .map(|tc| build_glyph_cache(&font, &chars, tc))
         .collect::<anyhow::Result<Vec<_>>>()?;
+
+    let mut clock_renderer = ClockRenderer::new();
+    let mut clock_texture_caches: Vec<Option<CachedClockTexture>> =
+        (0..num_displays).map(|_| None).collect();
 
     let mut event_pump = sdl.event_pump().map_err(|e| anyhow::anyhow!(e))?;
     let mut last_frame = Instant::now();
@@ -208,6 +221,22 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
                         );
                         let _ = canvas.copy(texture, None, Some(dst));
                         texture.set_color_mod(base_color.r, base_color.g, base_color.b);
+                    }
+                }
+            }
+
+            // Clock: primary display only
+            if idx == 0 {
+                if let Some(ref cf) = clock_font {
+                    if let Err(e) = clock_renderer.render(
+                        canvas,
+                        &texture_creators[idx],
+                        cf,
+                        startup_time.elapsed().as_secs_f32(),
+                        &mut rng,
+                        &mut clock_texture_caches[idx],
+                    ) {
+                        eprintln!("matrix-screensaver: clock render error: {e}");
                     }
                 }
             }
