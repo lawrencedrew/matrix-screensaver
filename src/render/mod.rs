@@ -112,6 +112,9 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
         (0..num_displays).map(|_| None).collect();
 
     let mut event_pump = sdl.event_pump().map_err(|e| anyhow::anyhow!(e))?;
+    // Give the WM time to register our windows, then pin them to all desktops
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    set_omnipresent();
     let mut last_frame = Instant::now();
     let startup_time = Instant::now();
 
@@ -245,6 +248,92 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
 
     sdl.mouse().show_cursor(true);
     Ok(())
+}
+
+fn set_omnipresent() {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::*;
+    use x11rb::wrapper::ConnectionExt as _;
+
+    let Ok((conn, screen_num)) = x11rb::connect(None) else { return; };
+    let screen = &conn.setup().roots[screen_num];
+    let root = screen.root;
+
+    let intern = |name: &[u8]| -> Option<u32> {
+        conn.intern_atom(false, name).ok()?.reply().ok()
+            .and_then(|r| if r.atom != 0 { Some(r.atom) } else { None })
+    };
+
+    let Some(net_client_list)     = intern(b"_NET_CLIENT_LIST")     else { return; };
+    let Some(net_wm_name)         = intern(b"_NET_WM_NAME")         else { return; };
+    let Some(net_wm_desktop)      = intern(b"_NET_WM_DESKTOP")      else { return; };
+    let Some(net_wm_state)        = intern(b"_NET_WM_STATE")        else { return; };
+    let Some(net_wm_state_sticky) = intern(b"_NET_WM_STATE_STICKY") else { return; };
+    let Some(utf8_string)         = intern(b"UTF8_STRING")          else { return; };
+
+    // Get all managed client windows from the WM
+    let windows: Vec<u32> = conn
+        .get_property(false, root, net_client_list, AtomEnum::WINDOW, 0, 10240)
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .and_then(|r| r.value32().map(|it| it.collect()))
+        .unwrap_or_default();
+
+    for win in windows {
+        // Only touch our own windows
+        let name: Vec<u8> = conn
+            .get_property(false, win, net_wm_name, utf8_string, 0, 512)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map(|r| r.value)
+            .unwrap_or_default();
+        if name != b"matrix-screensaver" {
+            continue;
+        }
+
+        // Set the property directly (for WMs that read it at map time)
+        let _ = conn.change_property32(
+            PropMode::REPLACE,
+            win,
+            net_wm_desktop,
+            AtomEnum::CARDINAL,
+            &[0xFFFF_FFFFu32],
+        );
+
+        // Send _NET_WM_DESKTOP ClientMessage (for already-mapped windows)
+        let desktop_event = ClientMessageEvent {
+            response_type: CLIENT_MESSAGE_EVENT as u8,
+            format: 32,
+            sequence: 0,
+            window: win,
+            type_: net_wm_desktop,
+            data: ClientMessageData::from([0xFFFF_FFFFu32, 1, 0, 0, 0]),
+        };
+        let _ = conn.send_event(
+            false,
+            root,
+            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+            desktop_event,
+        );
+
+        // Also add _NET_WM_STATE_STICKY for good measure
+        let sticky_event = ClientMessageEvent {
+            response_type: CLIENT_MESSAGE_EVENT as u8,
+            format: 32,
+            sequence: 0,
+            window: win,
+            type_: net_wm_state,
+            data: ClientMessageData::from([1u32, net_wm_state_sticky, 0, 1, 0]),
+        };
+        let _ = conn.send_event(
+            false,
+            root,
+            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+            sticky_event,
+        );
+    }
+
+    let _ = conn.flush();
 }
 
 fn find_monospace_font() -> anyhow::Result<(std::path::PathBuf, u32)> {
