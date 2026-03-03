@@ -15,11 +15,10 @@ use clock::{ClockRenderer, CachedClockTexture};
 const CELL_W: i32 = 14;
 const CELL_H: i32 = 18;
 
-// Fix 3: Safe parse_color that validates hex string length
 pub fn parse_color(hex: &str) -> Color {
     let hex = hex.trim_start_matches('#');
     if hex.len() < 6 {
-        return Color::RGB(0, 255, 0); // default green
+        return Color::RGB(0, 255, 0);
     }
     let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
     let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255);
@@ -27,7 +26,6 @@ pub fn parse_color(hex: &str) -> Color {
     Color::RGB(r, g, b)
 }
 
-// Fix 1: Pre-render all glyphs once into a cache keyed by char
 fn build_glyph_cache<'a>(
     font: &sdl2::ttf::Font,
     chars: &[char],
@@ -67,54 +65,69 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
     let base_color = parse_color(&config.color);
     let frame_duration = Duration::from_secs_f32(1.0 / config.fps as f32);
 
-    // One borderless window per display, positioned at each display's bounds
     let num_displays = video.num_video_displays().unwrap_or(1) as usize;
+    // One window per (physical monitor × virtual desktop) so each desktop
+    // gets a live-rendering window rather than a compositor-cached snapshot.
+    let num_virtual_desktops = get_num_virtual_desktops();
+
     let mut canvases: Vec<Canvas<Window>> = Vec::new();
-    let mut columns_per_display: Vec<Vec<Column>> = Vec::new();
+    let mut columns_per_canvas: Vec<Vec<Column>> = Vec::new();
 
     use rand::Rng;
     let mut rng = rand::thread_rng();
 
+    // canvas_idx encodes (monitor, desktop) so assign_desktops() can later
+    // route each window to the correct virtual desktop.
+    let mut canvas_idx: usize = 0;
     for i in 0..num_displays {
         let bounds = video.display_bounds(i as i32).map_err(|e| anyhow::anyhow!(e))?;
-        let mut window = video
-            .window("matrix-screensaver", bounds.width(), bounds.height())
-            .position(bounds.x(), bounds.y())
-            .borderless()
-            .build()?;
-        window.set_fullscreen(sdl2::video::FullscreenType::Desktop)
-            .map_err(|e| anyhow::anyhow!(e))?;
-        let canvas = window.into_canvas().accelerated().build()?;
         let cols = bounds.width() as i32 / CELL_W;
         let rows = bounds.height() as i32 / CELL_H;
-        columns_per_display.push(
-            (0..cols)
-                .filter(|_| rng.gen::<f32>() > 0.3)
-                .map(|x| Column::new(x, rows, config.speed))
-                .collect(),
-        );
-        canvases.push(canvas);
+
+        for _d in 0..num_virtual_desktops {
+            // Unique title carries the canvas index so assign_desktops() can
+            // parse which virtual desktop this window belongs to.
+            let title = format!("matrix-screensaver-{canvas_idx}");
+            let mut window = video
+                .window(&title, bounds.width(), bounds.height())
+                .position(bounds.x(), bounds.y())
+                .borderless()
+                .build()?;
+            window.set_fullscreen(sdl2::video::FullscreenType::Desktop)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let canvas = window.into_canvas().accelerated().build()?;
+
+            columns_per_canvas.push(
+                (0..cols)
+                    .filter(|_| rng.gen::<f32>() > 0.3)
+                    .map(|x| Column::new(x, rows, config.speed))
+                    .collect(),
+            );
+            canvases.push(canvas);
+            canvas_idx += 1;
+        }
     }
 
-    // TextureCreator<WindowContext> is owned (Rc internally) — not a borrow from Canvas
+    let total_canvases = canvases.len();
+
     let texture_creators: Vec<TextureCreator<WindowContext>> =
         canvases.iter().map(|c| c.texture_creator()).collect();
 
-    // Glyph cache per display — each display's renderer requires its own textures
-    // texture_creators must outlive glyph_caches
     let mut glyph_caches: Vec<HashMap<char, Texture>> = texture_creators
         .iter()
         .map(|tc| build_glyph_cache(&font, &chars, tc))
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    let mut clock_renderers: Vec<ClockRenderer> = (0..num_displays).map(|_| ClockRenderer::new()).collect();
+    let mut clock_renderers: Vec<ClockRenderer> =
+        (0..total_canvases).map(|_| ClockRenderer::new()).collect();
     let mut clock_texture_caches: Vec<Option<CachedClockTexture>> =
-        (0..num_displays).map(|_| None).collect();
+        (0..total_canvases).map(|_| None).collect();
 
     let mut event_pump = sdl.event_pump().map_err(|e| anyhow::anyhow!(e))?;
-    // Give the WM time to register our windows, then pin them to all desktops
+    // Give the WM time to register our windows, then assign each to its desktop.
     std::thread::sleep(std::time::Duration::from_millis(300));
-    set_omnipresent();
+    assign_desktops(num_virtual_desktops);
+
     let mut last_frame = Instant::now();
     let startup_time = Instant::now();
 
@@ -160,7 +173,7 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
         }
 
         for (idx, canvas) in canvases.iter_mut().enumerate() {
-            let cols = &mut columns_per_display[idx];
+            let cols = &mut columns_per_canvas[idx];
             let glyph_cache = &mut glyph_caches[idx];
             let rows = canvas.output_size().map(|(_, h)| h as i32).unwrap_or(1080) / CELL_H;
 
@@ -210,7 +223,6 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
                         canvas.copy(texture, None, Some(dst)).map_err(|e| anyhow::anyhow!(e))?;
                     }
                 }
-                // Glitch: 0.5% chance per frame to flash a random cell white
                 if rng.gen::<f32>() < 0.005 {
                     let glitch_y = rng.gen_range(0..rows);
                     let ch = chars[rng.gen_range(0..chars.len())];
@@ -228,7 +240,6 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
                 }
             }
 
-            // Clock: all displays
             if let Some(ref cf) = clock_font {
                 if let Err(e) = clock_renderers[idx].render(
                     canvas,
@@ -250,7 +261,29 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn set_omnipresent() {
+/// Returns the number of virtual desktops reported by the window manager.
+fn get_num_virtual_desktops() -> usize {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::*;
+
+    let Ok((conn, screen_num)) = x11rb::connect(None) else { return 1; };
+    let screen = &conn.setup().roots[screen_num];
+    let root = screen.root;
+
+    let Ok(cookie) = conn.intern_atom(false, b"_NET_NUMBER_OF_DESKTOPS") else { return 1; };
+    let Ok(atom_reply) = cookie.reply() else { return 1; };
+    if atom_reply.atom == 0 { return 1; }
+
+    conn.get_property(false, root, atom_reply.atom, AtomEnum::CARDINAL, 0, 1)
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .and_then(|r| r.value32().and_then(|mut it| it.next()))
+        .unwrap_or(1) as usize
+}
+
+/// After the WM has registered our windows, assign each to its virtual desktop.
+/// Windows are titled "matrix-screensaver-{idx}"; desktop = idx % num_virtual_desktops.
+fn assign_desktops(num_virtual_desktops: usize) {
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::*;
     use x11rb::wrapper::ConnectionExt as _;
@@ -264,14 +297,11 @@ fn set_omnipresent() {
             .and_then(|r| if r.atom != 0 { Some(r.atom) } else { None })
     };
 
-    let Some(net_client_list)     = intern(b"_NET_CLIENT_LIST")     else { return; };
-    let Some(net_wm_name)         = intern(b"_NET_WM_NAME")         else { return; };
-    let Some(net_wm_desktop)      = intern(b"_NET_WM_DESKTOP")      else { return; };
-    let Some(net_wm_state)        = intern(b"_NET_WM_STATE")        else { return; };
-    let Some(net_wm_state_sticky) = intern(b"_NET_WM_STATE_STICKY") else { return; };
-    let Some(utf8_string)         = intern(b"UTF8_STRING")          else { return; };
+    let Some(net_client_list) = intern(b"_NET_CLIENT_LIST") else { return; };
+    let Some(net_wm_name)     = intern(b"_NET_WM_NAME")     else { return; };
+    let Some(net_wm_desktop)  = intern(b"_NET_WM_DESKTOP")  else { return; };
+    let Some(utf8_string)     = intern(b"UTF8_STRING")       else { return; };
 
-    // Get all managed client windows from the WM
     let windows: Vec<u32> = conn
         .get_property(false, root, net_client_list, AtomEnum::WINDOW, 0, 10240)
         .ok()
@@ -280,56 +310,42 @@ fn set_omnipresent() {
         .unwrap_or_default();
 
     for win in windows {
-        // Only touch our own windows
         let name: Vec<u8> = conn
             .get_property(false, win, net_wm_name, utf8_string, 0, 512)
             .ok()
             .and_then(|c| c.reply().ok())
             .map(|r| r.value)
             .unwrap_or_default();
-        if name != b"matrix-screensaver" {
-            continue;
-        }
 
-        // Set the property directly (for WMs that read it at map time)
+        let name_str = String::from_utf8_lossy(&name);
+        let Some(suffix) = name_str.strip_prefix("matrix-screensaver-") else { continue; };
+        let Ok(idx) = suffix.parse::<usize>() else { continue; };
+
+        let desktop = (idx % num_virtual_desktops) as u32;
+
+        // Set property (read by WM at map time)
         let _ = conn.change_property32(
             PropMode::REPLACE,
             win,
             net_wm_desktop,
             AtomEnum::CARDINAL,
-            &[0xFFFF_FFFFu32],
+            &[desktop],
         );
 
-        // Send _NET_WM_DESKTOP ClientMessage (for already-mapped windows)
-        let desktop_event = ClientMessageEvent {
+        // Send ClientMessage so already-mapped windows are moved
+        let event = ClientMessageEvent {
             response_type: CLIENT_MESSAGE_EVENT as u8,
             format: 32,
             sequence: 0,
             window: win,
             type_: net_wm_desktop,
-            data: ClientMessageData::from([0xFFFF_FFFFu32, 1, 0, 0, 0]),
+            data: ClientMessageData::from([desktop, 1u32, 0, 0, 0]),
         };
         let _ = conn.send_event(
             false,
             root,
             EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
-            desktop_event,
-        );
-
-        // Also add _NET_WM_STATE_STICKY for good measure
-        let sticky_event = ClientMessageEvent {
-            response_type: CLIENT_MESSAGE_EVENT as u8,
-            format: 32,
-            sequence: 0,
-            window: win,
-            type_: net_wm_state,
-            data: ClientMessageData::from([1u32, net_wm_state_sticky, 0, 1, 0]),
-        };
-        let _ = conn.send_event(
-            false,
-            root,
-            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
-            sticky_event,
+            event,
         );
     }
 
@@ -338,11 +354,9 @@ fn set_omnipresent() {
 
 fn find_monospace_font() -> anyhow::Result<(std::path::PathBuf, u32)> {
     let candidates: &[(&str, u32)] = &[
-        // Noto Sans Mono CJK JP — covers Katakana, prefer it
         ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 5),
         ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 5),
         ("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", 5),
-        // Latin fallbacks (index 0 for single-face TTF)
         ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 0),
         ("/usr/share/fonts/TTF/DejaVuSansMono.ttf", 0),
         ("/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf", 0),
