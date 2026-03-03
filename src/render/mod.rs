@@ -66,46 +66,44 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
     let frame_duration = Duration::from_secs_f32(1.0 / config.fps as f32);
 
     let num_displays = video.num_video_displays().unwrap_or(1) as usize;
-    // One window per (physical monitor × virtual desktop) so each desktop
-    // gets a live-rendering window rather than a compositor-cached snapshot.
-    let num_virtual_desktops = get_num_virtual_desktops();
-
-    let mut canvases: Vec<Canvas<Window>> = Vec::new();
-    let mut columns_per_canvas: Vec<Vec<Column>> = Vec::new();
 
     use rand::Rng;
     let mut rng = rand::thread_rng();
 
-    // canvas_idx encodes (monitor, desktop) so assign_desktops() can later
-    // route each window to the correct virtual desktop.
-    let mut canvas_idx: usize = 0;
+    // Phase 1: Create windows hidden so we can set override_redirect before
+    // they're ever mapped. override_redirect windows bypass WM management:
+    // they appear above panels/taskbars and on all virtual desktops.
+    let mut pending: Vec<(sdl2::video::Window, Vec<Column>)> = Vec::new();
     for i in 0..num_displays {
         let bounds = video.display_bounds(i as i32).map_err(|e| anyhow::anyhow!(e))?;
-        let cols = bounds.width() as i32 / CELL_W;
-        let rows = bounds.height() as i32 / CELL_H;
+        let n_cols = bounds.width() as i32 / CELL_W;
+        let n_rows = bounds.height() as i32 / CELL_H;
+        let title = format!("matrix-screensaver-{i}");
+        let window = video
+            .window(&title, bounds.width(), bounds.height())
+            .position(bounds.x(), bounds.y())
+            .borderless()
+            .hidden()
+            .build()?;
+        let columns = (0..n_cols)
+            .filter(|_| rng.gen::<f32>() > 0.3)
+            .map(|x| Column::new(x, n_rows, config.speed))
+            .collect();
+        pending.push((window, columns));
+    }
 
-        for _d in 0..num_virtual_desktops {
-            // Unique title carries the canvas index so assign_desktops() can
-            // parse which virtual desktop this window belongs to.
-            let title = format!("matrix-screensaver-{canvas_idx}");
-            let mut window = video
-                .window(&title, bounds.width(), bounds.height())
-                .position(bounds.x(), bounds.y())
-                .borderless()
-                .build()?;
-            window.set_fullscreen(sdl2::video::FullscreenType::Desktop)
-                .map_err(|e| anyhow::anyhow!(e))?;
-            let canvas = window.into_canvas().accelerated().build()?;
+    // Phase 2: Set override_redirect on every window while it is still unmapped.
+    set_override_redirect_pre_map(num_displays);
 
-            columns_per_canvas.push(
-                (0..cols)
-                    .filter(|_| rng.gen::<f32>() > 0.3)
-                    .map(|x| Column::new(x, rows, config.speed))
-                    .collect(),
-            );
-            canvases.push(canvas);
-            canvas_idx += 1;
-        }
+    // Phase 3: Build GL canvases and show each window (now with override_redirect set).
+    let mut canvases: Vec<Canvas<Window>> = Vec::new();
+    let mut columns_per_canvas: Vec<Vec<Column>> = Vec::new();
+    for (window, columns) in pending {
+        let mut canvas = window.into_canvas().accelerated().build()?;
+        canvas.window_mut().show();
+        canvas.window_mut().raise();
+        columns_per_canvas.push(columns);
+        canvases.push(canvas);
     }
 
     let total_canvases = canvases.len();
@@ -124,9 +122,9 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
         (0..total_canvases).map(|_| None).collect();
 
     let mut event_pump = sdl.event_pump().map_err(|e| anyhow::anyhow!(e))?;
-    // Give the WM time to register our windows, then assign each to its desktop.
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    assign_desktops(num_virtual_desktops);
+
+    // Set input focus on the first window so keyboard/mouse events reach our pump.
+    focus_first_screensaver_window(num_displays);
 
     let mut last_frame = Instant::now();
     let startup_time = Instant::now();
@@ -261,95 +259,122 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Returns the number of virtual desktops reported by the window manager.
-fn get_num_virtual_desktops() -> usize {
+/// Set override_redirect on our windows while they are still unmapped (hidden).
+/// Finds them via X11 root window tree — SDL2 creates the X11 window and sets
+/// WM_NAME even for hidden windows, so they appear in query_tree even before
+/// they are ever mapped.
+fn set_override_redirect_pre_map(num_displays: usize) {
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::*;
-
-    let Ok((conn, screen_num)) = x11rb::connect(None) else { return 1; };
-    let screen = &conn.setup().roots[screen_num];
-    let root = screen.root;
-
-    let Ok(cookie) = conn.intern_atom(false, b"_NET_NUMBER_OF_DESKTOPS") else { return 1; };
-    let Ok(atom_reply) = cookie.reply() else { return 1; };
-    if atom_reply.atom == 0 { return 1; }
-
-    conn.get_property(false, root, atom_reply.atom, AtomEnum::CARDINAL, 0, 1)
-        .ok()
-        .and_then(|c| c.reply().ok())
-        .and_then(|r| r.value32().and_then(|mut it| it.next()))
-        .unwrap_or(1) as usize
-}
-
-/// After the WM has registered our windows, assign each to its virtual desktop.
-/// Windows are titled "matrix-screensaver-{idx}"; desktop = idx % num_virtual_desktops.
-fn assign_desktops(num_virtual_desktops: usize) {
-    use x11rb::connection::Connection;
-    use x11rb::protocol::xproto::*;
-    use x11rb::wrapper::ConnectionExt as _;
 
     let Ok((conn, screen_num)) = x11rb::connect(None) else { return; };
     let screen = &conn.setup().roots[screen_num];
     let root = screen.root;
+
+    // query_tree returns ALL children of root, including unmapped windows.
+    let tree = match conn.query_tree(root) {
+        Ok(c) => match c.reply() {
+            Ok(r) => r,
+            Err(_) => return,
+        },
+        Err(_) => return,
+    };
 
     let intern = |name: &[u8]| -> Option<u32> {
         conn.intern_atom(false, name).ok()?.reply().ok()
             .and_then(|r| if r.atom != 0 { Some(r.atom) } else { None })
     };
 
-    let Some(net_client_list) = intern(b"_NET_CLIENT_LIST") else { return; };
-    let Some(net_wm_name)     = intern(b"_NET_WM_NAME")     else { return; };
-    let Some(net_wm_desktop)  = intern(b"_NET_WM_DESKTOP")  else { return; };
-    let Some(utf8_string)     = intern(b"UTF8_STRING")       else { return; };
+    // Try _NET_WM_NAME (UTF-8) first; fall back to WM_NAME if needed.
+    let net_wm_name = intern(b"_NET_WM_NAME");
+    let utf8_string = intern(b"UTF8_STRING");
+    let wm_name_atom = u32::from(AtomEnum::WM_NAME);
+    let string_atom  = u32::from(AtomEnum::STRING);
 
-    let windows: Vec<u32> = conn
-        .get_property(false, root, net_client_list, AtomEnum::WINDOW, 0, 10240)
-        .ok()
-        .and_then(|c| c.reply().ok())
-        .and_then(|r| r.value32().map(|it| it.collect()))
-        .unwrap_or_default();
+    for win in tree.children {
+        let title = if let (Some(nwn), Some(us)) = (net_wm_name, utf8_string) {
+            let v: Vec<u8> = conn
+                .get_property(false, win, nwn, us, 0, 512)
+                .ok().and_then(|c| c.reply().ok()).map(|r| r.value)
+                .unwrap_or_default();
+            if v.is_empty() {
+                // fallback to WM_NAME
+                conn.get_property(false, win, wm_name_atom, string_atom, 0, 512)
+                    .ok().and_then(|c| c.reply().ok()).map(|r| r.value)
+                    .unwrap_or_default()
+            } else { v }
+        } else {
+            conn.get_property(false, win, wm_name_atom, string_atom, 0, 512)
+                .ok().and_then(|c| c.reply().ok()).map(|r| r.value)
+                .unwrap_or_default()
+        };
 
-    for win in windows {
-        let name: Vec<u8> = conn
-            .get_property(false, win, net_wm_name, utf8_string, 0, 512)
-            .ok()
-            .and_then(|c| c.reply().ok())
-            .map(|r| r.value)
-            .unwrap_or_default();
-
-        let name_str = String::from_utf8_lossy(&name);
+        let name_str = String::from_utf8_lossy(&title);
         let Some(suffix) = name_str.strip_prefix("matrix-screensaver-") else { continue; };
         let Ok(idx) = suffix.parse::<usize>() else { continue; };
+        if idx >= num_displays { continue; }
 
-        let desktop = (idx % num_virtual_desktops) as u32;
-
-        // Set property (read by WM at map time)
-        let _ = conn.change_property32(
-            PropMode::REPLACE,
+        let _ = conn.change_window_attributes(
             win,
-            net_wm_desktop,
-            AtomEnum::CARDINAL,
-            &[desktop],
-        );
-
-        // Send ClientMessage so already-mapped windows are moved
-        let event = ClientMessageEvent {
-            response_type: CLIENT_MESSAGE_EVENT as u8,
-            format: 32,
-            sequence: 0,
-            window: win,
-            type_: net_wm_desktop,
-            data: ClientMessageData::from([desktop, 1u32, 0, 0, 0]),
-        };
-        let _ = conn.send_event(
-            false,
-            root,
-            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
-            event,
+            &ChangeWindowAttributesAux::new().override_redirect(1),
         );
     }
 
     let _ = conn.flush();
+}
+
+/// After showing override_redirect windows, explicitly focus the first one
+/// so that keyboard events reach our SDL event pump.
+fn focus_first_screensaver_window(num_displays: usize) {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::*;
+
+    let Ok((conn, screen_num)) = x11rb::connect(None) else { return; };
+    let screen = &conn.setup().roots[screen_num];
+    let root = screen.root;
+
+    let tree = match conn.query_tree(root) {
+        Ok(c) => match c.reply() { Ok(r) => r, Err(_) => return },
+        Err(_) => return,
+    };
+
+    let intern = |name: &[u8]| -> Option<u32> {
+        conn.intern_atom(false, name).ok()?.reply().ok()
+            .and_then(|r| if r.atom != 0 { Some(r.atom) } else { None })
+    };
+    let net_wm_name = intern(b"_NET_WM_NAME");
+    let utf8_string = intern(b"UTF8_STRING");
+    let wm_name_atom = u32::from(AtomEnum::WM_NAME);
+    let string_atom  = u32::from(AtomEnum::STRING);
+
+    let mut found: Vec<(usize, u32)> = Vec::new();
+    for win in tree.children {
+        let title = if let (Some(nwn), Some(us)) = (net_wm_name, utf8_string) {
+            let v: Vec<u8> = conn
+                .get_property(false, win, nwn, us, 0, 512)
+                .ok().and_then(|c| c.reply().ok()).map(|r| r.value)
+                .unwrap_or_default();
+            if v.is_empty() {
+                conn.get_property(false, win, wm_name_atom, string_atom, 0, 512)
+                    .ok().and_then(|c| c.reply().ok()).map(|r| r.value)
+                    .unwrap_or_default()
+            } else { v }
+        } else {
+            conn.get_property(false, win, wm_name_atom, string_atom, 0, 512)
+                .ok().and_then(|c| c.reply().ok()).map(|r| r.value)
+                .unwrap_or_default()
+        };
+        let name_str = String::from_utf8_lossy(&title);
+        let Some(suffix) = name_str.strip_prefix("matrix-screensaver-") else { continue; };
+        let Ok(idx) = suffix.parse::<usize>() else { continue; };
+        if idx < num_displays { found.push((idx, win)); }
+    }
+
+    found.sort_by_key(|&(idx, _)| idx);
+    if let Some(&(_, win)) = found.first() {
+        let _ = conn.set_input_focus(InputFocus::NONE, win, x11rb::CURRENT_TIME);
+        let _ = conn.flush();
+    }
 }
 
 fn find_monospace_font() -> anyhow::Result<(std::path::PathBuf, u32)> {
