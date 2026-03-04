@@ -42,10 +42,11 @@ async fn main() -> anyhow::Result<()> {
                     Ok(Err(e)) => eprintln!("matrix-screensaver: screensaver error: {e}"),
                     Err(e) => eprintln!("matrix-screensaver: screensaver panicked: {e}"),
                 }
+                // Drain any idle/wake events that queued up while the screensaver
+                // was running, so a stale Idle event doesn't relaunch immediately.
+                while rx.try_recv().is_ok() {}
             }
-            IdleEvent::Wake => {
-                // SDL2 window exits on mouse/key activity — Wake events are informational
-            }
+            IdleEvent::Wake => {}
         }
     }
 

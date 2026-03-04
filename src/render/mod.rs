@@ -140,20 +140,32 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
 
     sdl.mouse().show_cursor(false);
 
+    let mut exit_requested: Option<Instant> = None;
+
     'running: loop {
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
                 | Event::KeyDown { .. }
                 | Event::MouseButtonDown { .. } => {
-                    break 'running;
+                    if exit_requested.is_none() {
+                        exit_requested = Some(Instant::now());
+                    }
                 }
                 Event::MouseMotion { .. }
                     if startup_time.elapsed() > Duration::from_millis(500) =>
                 {
-                    break 'running;
+                    if exit_requested.is_none() {
+                        exit_requested = Some(Instant::now());
+                    }
                 }
                 _ => {}
+            }
+        }
+
+        if let Some(t) = exit_requested {
+            if t.elapsed() > Duration::from_millis(600) {
+                break 'running;
             }
         }
 
@@ -166,7 +178,7 @@ pub fn run_screensaver(config: &Config) -> anyhow::Result<()> {
         let delta = after_sleep.duration_since(last_frame).as_secs_f32().max(0.001);
         last_frame = after_sleep;
 
-        let speed_mult = 1.0_f32;
+        let speed_mult = if exit_requested.is_some() { 5.0_f32 } else { 1.0_f32 };
 
         for (idx, canvas) in canvases.iter_mut().enumerate() {
             let cols = &mut columns_per_canvas[idx];
